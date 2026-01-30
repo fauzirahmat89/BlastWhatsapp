@@ -154,33 +154,100 @@ class SenderWorker(QThread):
                             # Use JavaScript Click for Attach button to avoid interception
                             driver.execute_script("arguments[0].click();", attach_btn)
                             
-                            time.sleep(1) # Wait for menu animation
+                            time.sleep(2) # Wait for menu animation
                             
-                            # Find all file inputs
+                            # Explicitly CLICK "Photos & Videos" button
+                            print("Clicking 'Photos & Videos' button...")
+                            try:
+                                # Updated Robust XPaths based on HTML analysis
+                                photo_video_xpath = (
+                                    '//*[contains(text(), "Foto & Video")] | '         
+                                    '//*[contains(text(), "Photos & Videos")] | '
+                                    '//*[local-name()="svg"]/*[local-name()="title"][text()="ic-filter-filled"]/ancestor::div[@role="button"] | '
+                                    '//*[local-name()="svg"]/*[local-name()="title"][text()="ic-filter-filled"]/ancestor::li'
+                                )
+                                
+                                # Wait for elements
+                                buttons = WebDriverWait(driver, 5).until(
+                                    EC.presence_of_all_elements_located((By.XPATH, photo_video_xpath))
+                                )
+                                
+                                target_btn = None
+                                for btn in buttons:
+                                    # Safety Check: ensure we don't click Sticker
+                                    # Get outer HTML to check for "Sticker" keyword nearby
+                                    try:
+                                        # Go up a few levels to check context
+                                        context_html = btn.find_element(By.XPATH, "./../..").get_attribute('outerHTML')
+                                        if "Stiker" in context_html or "Sticker" in context_html or "wds-ic-sticker" in context_html:
+                                            continue
+                                    except:
+                                        pass
+                                        
+                                    target_btn = btn
+                                    break
+                                
+                                if target_btn:
+                                    print("Found Photo/Video button via text/icon match.")
+                                    driver.execute_script("arguments[0].click();", target_btn)
+                                else:
+                                    # Fallback: Just click the 2nd item in the list (index 1) if strictly safe
+                                    print("Text/Icon match suspect. Trying fallback to 2nd list item...")
+                                    fallback_xpath = '//ul/li[2]//div[@role="button"]'
+                                    fallback_btn = driver.find_element(By.XPATH, fallback_xpath)
+                                    driver.execute_script("arguments[0].click();", fallback_btn)
+
+                                time.sleep(2) # Wait for input spawn
+                                
+                            except Exception as e:
+                                print(f"Failed to click Photo/Video button: {e}")
+                                # DEBUG: Dump the menu HTML to see what's wrong
+                                try:
+                                    menu = driver.find_element(By.XPATH, '//ul')
+                                    print("--- DUMPING MENU HTML FOR DEBUGGING ---")
+                                    print(menu.get_attribute('outerHTML')[:500]) # Print first 500 chars
+                                    print("--- END DUMP ---")
+                                except:
+                                    print("Could not dump menu HTML.")
+                                # raise e # Do not raise, let it try to find input anyway
+
+                            # Find the file input that accepts VIDEO (identifies Photo/Video input)
                             inputs = driver.find_elements(By.XPATH, '//input[@type="file"]')
                             target_input = None
+                            
                             for inp in inputs:
                                 accept = inp.get_attribute('accept')
-                                if accept and 'image' in accept:
+                                if accept and 'video' in accept:
                                     target_input = inp
                                     break
+                            
+                            # Fallback: Just take the last input spawned
                             if not target_input and inputs:
-                                for inp in inputs:
-                                    if inp.get_attribute('accept') == '*':
-                                        target_input = inp
-                                        break
-                                if not target_input:
-                                    target_input = inputs[0]
-                                    
+                                target_input = inputs[-1]
+                            
                             if target_input:
                                 target_input.send_keys(self.image_path)
                             else:
-                                raise Exception("No file input element found.")
+                                raise Exception("No file input found after clicking Photos & Videos.")
                             
-                            # Wait for preview and send button (Image)
-                            # CRITICAL: Wait for the image to actually load in the preview modal
-                            # We look for the send button container or the button itself
-                            send_xpath = '//span[@data-icon="send"] | //span[@data-icon="wds-ic-send-filled"] | //span[@data-icon="send-light"]'
+                            # Wait for preview and send button (Image/Doc)
+                            
+                            # Wait for preview and send button (Image/Doc)
+                            # CRITICAL: Wait for the image/doc to actually load in the preview modal
+                            
+                            # Multiple selectors for the Send button in the preview modal
+                            # 1. Standard icon spans
+                            # 2. The green circle button wrapper (usually has aria-label="Send" or "Kirim")
+                            # 3. The specific class provided by user (risky if dynamic, but added as fallback)
+                            
+                            send_xpath = (
+                                '//span[@data-icon="send"] | '
+                                '//span[@data-icon="wds-ic-send-filled"] | '
+                                '//span[@data-icon="send-light"] | '
+                                '//div[@aria-label="Send"] | '
+                                '//div[@aria-label="Kirim"] | '
+                                '//div[contains(@class, "x1ey2m1c") and @role="button"]' # Adjusted to look for button role
+                            )
                             
                             # Increased wait time and specific condition
                             send_btn_img = WebDriverWait(driver, 15).until(
@@ -194,7 +261,7 @@ class SenderWorker(QThread):
                             driver.execute_script("arguments[0].click();", send_btn_img)
                             
                             # Wait for upload and return to chat
-                            time.sleep(3) 
+                            time.sleep(3)
                             
                         except Exception as e:
                              self.progress.emit(int((index/total_messages)*100), f"Error sending image to {phone}: {e}")
