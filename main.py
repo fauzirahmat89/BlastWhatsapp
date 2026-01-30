@@ -143,43 +143,81 @@ class SenderWorker(QThread):
                     # 2. Attach Image if exists
                     if self.image_path and os.path.exists(self.image_path):
                         try:
-                            # Click attach button (Clip icon)
-                            attach_btn = WebDriverWait(driver, 10).until(
-                                EC.presence_of_element_located((By.XPATH, '//div[@title="Attach"]'))
+                            # Click attach button (New: Plus icon, Old: Clip icon)
+                            attach_xpath = '//span[@data-icon="plus-rounded"] | //div[@title="Attach"] | //span[@data-icon="clip"]'
+                            attach_btn = WebDriverWait(driver, 15).until(
+                                EC.presence_of_element_located((By.XPATH, attach_xpath))
                             )
-                            attach_btn.click()
+                            # Wait a bit for UI to settle (to avoid menu closing immediately if still loading)
+                            time.sleep(1)
                             
-                            # Input file
-                            # Image input is usually an input[type='file'] inside the menu
-                            image_input = WebDriverWait(driver, 10).until(
-                                EC.presence_of_element_located((By.XPATH, '//input[@accept="image/*,video/mp4,video/3gpp,video/quicktime"]'))
-                            )
-                            image_input.send_keys(self.image_path)
+                            # Use JavaScript Click for Attach button to avoid interception
+                            driver.execute_script("arguments[0].click();", attach_btn)
                             
-                            # Wait for preview and send button
-                            # WhatsApp often changes the send icon name. We check for multiple common ones.
+                            time.sleep(1) # Wait for menu animation
+                            
+                            # Find all file inputs
+                            inputs = driver.find_elements(By.XPATH, '//input[@type="file"]')
+                            target_input = None
+                            for inp in inputs:
+                                accept = inp.get_attribute('accept')
+                                if accept and 'image' in accept:
+                                    target_input = inp
+                                    break
+                            if not target_input and inputs:
+                                for inp in inputs:
+                                    if inp.get_attribute('accept') == '*':
+                                        target_input = inp
+                                        break
+                                if not target_input:
+                                    target_input = inputs[0]
+                                    
+                            if target_input:
+                                target_input.send_keys(self.image_path)
+                            else:
+                                raise Exception("No file input element found.")
+                            
+                            # Wait for preview and send button (Image)
+                            # CRITICAL: Wait for the image to actually load in the preview modal
+                            # We look for the send button container or the button itself
                             send_xpath = '//span[@data-icon="send"] | //span[@data-icon="wds-ic-send-filled"] | //span[@data-icon="send-light"]'
-                            send_btn_img = WebDriverWait(driver, 10).until(
-                                EC.element_to_be_clickable((By.XPATH, send_xpath))
+                            
+                            # Increased wait time and specific condition
+                            send_btn_img = WebDriverWait(driver, 15).until(
+                                EC.presence_of_element_located((By.XPATH, send_xpath))
                             )
-                            time.sleep(1) # Small buffer
-                            send_btn_img.click()
+                            
+                            # Force wait for animation/overlay to clear
+                            time.sleep(2) 
+                            
+                            # Use JavaScript Click for Image Send
+                            driver.execute_script("arguments[0].click();", send_btn_img)
+                            
+                            # Wait for upload and return to chat
+                            time.sleep(3) 
+                            
                         except Exception as e:
                              self.progress.emit(int((index/total_messages)*100), f"Error sending image to {phone}: {e}")
-                             pass
-                    else:
-                        # Just text, already in input box. 
-                        # Try clicking send button first, fallback to ENTER key.
+                    
+                    # 3. Send Text Message
+                    # The text is likely still in the input box from the initial URL load.
+                    # We try to find the send button again (now in main chat view) and click it.
+                    try:
+                        self.progress.emit(int((index/total_messages)*100), f"Sending text to {phone}...")
+                        
+                        send_xpath = '//span[@data-icon="send"] | //span[@data-icon="wds-ic-send-filled"] | //span[@data-icon="send-light"] | //button[@aria-label="Send"]'
+                        # Reduced timeout as button should be there if text is present
+                        send_btn = WebDriverWait(driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, send_xpath))
+                        )
+                        driver.execute_script("arguments[0].click();", send_btn)
+                    except:
+                        # Fallback: Press Enter on the active element (the input box)
+                        # self.progress.emit(int((index/total_messages)*100), f"Click failed, trying ENTER key for {phone}...")
                         try:
-                            send_xpath = '//span[@data-icon="send"] | //span[@data-icon="wds-ic-send-filled"] | //span[@data-icon="send-light"] | //button[@aria-label="Send"]'
-                            send_btn = WebDriverWait(driver, 5).until(
-                                    EC.element_to_be_clickable((By.XPATH, send_xpath))
-                            )
-                            send_btn.click()
-                        except:
-                            # Fallback: Press Enter on the active element (the input box)
-                            self.progress.emit(int((index/total_messages)*100), f"Click failed, trying ENTER key for {phone}...")
-                            driver.switch_to.active_element.send_keys(Keys.ENTER)
+                             driver.switch_to.active_element.send_keys(Keys.ENTER)
+                        except Exception as ex:
+                             self.progress.emit(int((index/total_messages)*100), f"Failed to send text to {phone}: {ex}")
                     
                     self.progress.emit(int(((index+1)/total_messages)*100), f"Sent to {phone}")
                     
